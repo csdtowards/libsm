@@ -15,6 +15,7 @@
 use super::ecc::*;
 use super::field::FieldElem;
 use num_bigint::BigUint;
+use num_integer::Integer;
 use num_traits::*;
 use sm3::hash::Sm3Hash;
 
@@ -113,6 +114,10 @@ impl SigCtx {
         SigCtx {
             curve: EccCtx::new(),
         }
+    }
+
+    pub fn get_ecc_ctx(&self) -> &EccCtx {
+        &self.curve
     }
 
     pub fn hash(&self, id: &str, pk: &Point, msg: &[u8]) -> [u8; 32] {
@@ -252,6 +257,135 @@ impl SigCtx {
             }
             panic!("cannot sign")
         }
+    }
+
+    pub fn sign_raw_k(&self, digest: &[u8], sk: &BigUint, k1: &BigUint) -> Signature {
+        let curve = &self.curve;
+        // Get the value "e", which is the hash of message and ID, EC parameters and public key
+
+        let e = BigUint::from_bytes_be(digest);
+        let k = k1.clone();
+
+        // two while loops
+        loop {
+            // k = rand()
+            // (x_1, y_1) = g^kg
+            // let k = self.curve.random_uint();
+
+            let p_1 = curve.g_mul(&k);
+            let (x_1, _) = curve.to_affine(&p_1);
+            let x_1 = x_1.to_biguint();
+
+            // r = e + x_1
+            let r = (&e + x_1) % curve.get_n();
+            if r == BigUint::zero() || &r + &k == *curve.get_n() {
+                continue;
+            }
+
+            // s = (1 + sk)^-1 * (k - r * sk)
+            let s1 = curve.inv_n(&(sk + BigUint::one()));
+
+            let mut s2_1 = &r * sk;
+            if s2_1 < k {
+                s2_1 += curve.get_n();
+            }
+            let mut s2 = s2_1 - k;
+            s2 %= curve.get_n();
+            let s2 = curve.get_n() - s2;
+
+            let s = (s1 * s2) % curve.get_n();
+
+            if s != BigUint::zero() {
+                // Output the signature (r, s)
+                return Signature { r, s };
+            }
+            panic!("cannot sign")
+        }
+    }
+
+    pub fn sign_raw_rec(&self, digest: &[u8], sk: &BigUint, k: BigUint, ) -> Result<(Signature, u8), Sm2Error> {
+        let curve = &self.curve;
+        // Get the value "e", which is the hash of message and ID, EC parameters and public key
+
+        let e = BigUint::from_bytes_be(digest);
+
+        // two while loops
+        // loop {
+            // k = rand()
+            // (x_1, y_1) = g^kg
+            // let k = self.curve.random_uint();
+
+            let p_1 = curve.g_mul(&k);
+            let (x_1, y_1) = curve.to_affine(&p_1);
+            
+            let x_1 = x_1.to_biguint();
+            // let y_1 = y_1.to_biguint();
+
+            // r = e + x_1
+            let r_1 = &e + x_1.clone();
+            let r = r_1.clone() % curve.get_n();
+            if r == BigUint::zero() || &r + &k == *curve.get_n() {
+                return Err(Sm2Error::InvalidMessage);
+            }
+
+            let a = r_1.clone() / curve.get_n();
+            let recid = (if r_1 >= *curve.get_n() { 1 << a.to_u8().unwrap() } else {0}) | (if y_1.is_even() { 0 } else {1});
+
+            // let xxxx = y_1.to_biguint();
+            // println!("yyy: {}", xxxx);
+
+            // s = (1 + sk)^-1 * (k - r * sk)
+            let s1 = curve.inv_n(&(sk + BigUint::one()));
+
+            let mut s2_1 = &r * sk;
+            if s2_1 < k {
+                s2_1 += curve.get_n();
+            }
+            let mut s2 = s2_1 - k;
+            s2 %= curve.get_n();
+            let s2 = curve.get_n() - s2;
+
+            let s = (s1 * s2) % curve.get_n();
+
+            // if s.clone() * BigUint::from_u32(2).unwrap() > *curve.get_n() {
+            //     println!("yes")
+            // }
+
+            if s != BigUint::zero() {
+                // Output the signature (r, s)
+                return Ok((Signature { r, s }, recid));
+            }
+            
+            Err(Sm2Error::InvalidMessage)
+        // }
+    }
+
+    pub fn recover_raw(&self, msg: &[u8], sig: &Signature, rec_id: u8,) -> Result<Point, Sm2Error> {
+        debug_assert!(rec_id < 4);
+
+        if sig.get_r().is_zero() || sig.get_s().is_zero() {
+            return Err(Sm2Error::InvalidSignature);
+        }
+
+        let curve = &self.curve;
+
+        let e = BigUint::from_bytes_be(msg);
+
+        let mut x = sig.get_r().clone();
+        if rec_id & 4 != 0 {
+            x = x + curve.get_n() + curve.get_n();
+        } else if rec_id & 2 != 0 {
+            x = x +  curve.get_n();
+        }
+
+        x = x - e;
+
+        let p = curve.get_point(&x, rec_id & 1)?;
+
+        let r = curve.cc(sig.get_s(), sig.get_r(), &p)?;
+        
+
+        Ok(r)
     }
 
     pub fn verify(&self, msg: &[u8], pk: &Point, sig: &Signature) -> bool {

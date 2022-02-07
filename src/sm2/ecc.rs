@@ -568,6 +568,51 @@ impl EccCtx {
         ret
     }
 
+    pub fn get_point(&self, x: &BigUint, neg: u8,) -> Result<Point, Sm2Error> {
+        let ctx = &self.fctx;
+
+        let x = FieldElem::from_biguint(x);
+
+        let x_cubic = ctx.mul(&x, &ctx.mul(&x, &x));
+        let ax = ctx.mul(&x, &self.a);
+        let y_2 = ctx.add(&self.b, &ctx.add(&x_cubic, &ax));
+
+        let mut y = self.fctx.sqrt(&y_2)?;
+
+        // if neg {
+        //     y = self.fctx.neg(&y);
+        // }
+
+        if y.get_value(7) & 0x01 != neg as u32 {
+            y = self.fctx.neg(&y);
+        }
+
+        self.new_point(&x, &y)
+    }
+
+    pub fn cc(&self, s: &BigUint, r: &BigUint, p: &Point) -> Result<Point, Sm2Error> {
+        // let ctx = &self.fctx;
+
+        // let g = self.generator();
+        // let b1 = self.mul(&(s % self.get_n()), &g);
+        // println!("{}", b1);
+
+        let b =  self.g_mul(s);
+        let b = self.neg(&b);
+        let c = self.add(p, &b);
+
+        let x = s + r;
+        let x = self.inv_n(&x);
+        // let a = FieldElem::from_biguint(&x);
+
+        // let a = ctx.add(&FieldElem::from_biguint(s), &FieldElem::from_biguint(r));
+        // let a = ctx.inv(&a);
+
+        let r = self.mul(&x, &c);
+
+        Ok(r)
+    }
+
     pub fn bytes_to_point(&self, b: &[u8]) -> Result<Point, Sm2Error> {
         let ctx = &self.fctx;
 
